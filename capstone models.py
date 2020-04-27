@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Apr 23 13:46:20 2020
+
+@author: tfogarty
+"""
+# %% PreProcessing
+import pandas as pd
+import numpy as np
+from sklearn import metrics
+from sklearn.linear_model import LinearRegression
+import statsmodels.api as sm
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Lasso
+from sklearn.model_selection import GridSearchCV
+'''
+df = pd.read_csv('lindsey_clean_april_7.csv')
+
+schools = pd.unique(df.school_id)
+trainset = pd.DataFrame(columns=df.columns)
+testset = pd.DataFrame(columns=df.columns)
+
+for i in range(len(schools)):
+    sch = schools[i]
+    schset = df[df.school_id == sch]
+    perc = round(len(schset.school_id)*0.20)
+    train_index = np.random.choice(schset.index, replace=False, size=perc)
+    train = schset[schset.index.isin(train_index)]
+    trainset = trainset.append(train)
+    test = schset[~schset.index.isin(train_index)]
+    testset = testset.append(test)
+
+trainset = trainset.astype('float')
+testset = testset.astype('float')
+trainset = trainset.reset_index()
+trainset['anx_dep'] = 0.0
+for i in range(len(trainset.anxiety)):
+    if (trainset.anxiety[i]+trainset.depression[i] > 0):
+        trainset.anx_dep[i] = 1.0
+testset = testset.reset_index()
+testset['anx_dep'] = 0.0
+for i in range(len(testset.anxiety)):
+    if (testset.anxiety[i]+testset.depression[i] > 0):
+        testset.anx_dep[i] = 1.0
+'''
+        
+trainset = pd.read_csv('cleaned_trainingdata.csv')
+testset = pd.read_csv('cleaned_testingdata.csv')
+
+trainset = trainset.drop('Unnamed: 0', axis=1)
+testset = testset.drop('Unnamed: 0', axis=1)
+trainset = trainset.drop('Unnamed: 0.1', axis=1)
+testset = testset.drop('Unnamed: 0.1', axis=1)
+
+trainset = pd.get_dummies(trainset, columns=['region'])
+testset = pd.get_dummies(testset, columns=['region'])
+
+trainset = pd.get_dummies(trainset, columns=['public_private_religious'])
+testset = pd.get_dummies(testset, columns=['public_private_religious'])
+
+trainset.columns = ['index', 'anxiety', 'depression', 'campus_setting', 'school_size',
+       'cigarettes_last_30', 'ecigs_last_30', 'physical_fight_last_year',
+       'unprescribed_antidepressants', 'unprescribed_ED',
+       'unprescribed_painkillers', 'unprescribed_sedatives',
+       'unprescribed_stimulants', 'anorexia', 'bulimia', 'difficult_academics',
+       'difficult_career', 'difficult_finances', 'seek_help', 'school_id',
+       'safety_average', 'anx_dep', 'northeast_region', 'midwest_region',
+       'south_region', 'west_region', 'public',
+       'private', 'private_religious']
+testset.columns = ['index', 'anxiety', 'depression', 'campus_setting', 'school_size',
+       'cigarettes_last_30', 'ecigs_last_30', 'physical_fight_last_year',
+       'unprescribed_antidepressants', 'unprescribed_ED',
+       'unprescribed_painkillers', 'unprescribed_sedatives',
+       'unprescribed_stimulants', 'anorexia', 'bulimia', 'difficult_academics',
+       'difficult_career', 'difficult_finances', 'seek_help', 'school_id',
+       'safety_average', 'anx_dep', 'northeast_region', 'midwest_region',
+       'south_region', 'west_region', 'public',
+       'private', 'private_religious']
+
+train_means = trainset.groupby('school_id').mean()
+test_means = testset.groupby('school_id').mean()
+
+train_means = train_means.drop('index',axis=1)
+test_means = test_means.drop('index',axis=1)
+
+#train_means['safety'] = (train_means.daytime_campus_safety + train_means.nighttime_campus_safety+train_means.daytime_community_safety + train_means.nighttime_community_safety)/4
+#train_means = train_means.drop(['daytime_campus_safety','daytime_community_safety','nighttime_campus_safety','nighttime_community_safety'], axis =1)
+
+train = train_means.reset_index(drop=True)
+test = test_means.reset_index(drop=True)
+
+
+# %% Anxiety and Depression LR
+
+train_y = train.anx_dep
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.anx_dep
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lm = LinearRegression()
+lm.fit(train_x, train_y)
+pd.DataFrame(lm.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(train_y,train_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+sig_p = p_values[p_values <= 0.1].index
+test_x = test_x[sig_p]
+lm.fit(test_x,test_y)
+pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(test_y,test_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+predictions = lm.predict(test_x)
+sig_AD_LR = test_x.columns
+MAE_AD_LR = metrics.mean_absolute_error(test_y, predictions)
+MSE_AD_LR = metrics.mean_squared_error(test_y, predictions)
+RMSE_AD_LR = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_AD_LR = round(accuracy, 2)
+sum_AD_LR = fii.summary()
+covars_AD_LR = pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+
+# %% Anxiety and Depression RFR
+df = train.append(test)
+train1 = train
+for i in range(len(train1.index)):
+    if train1.anx_dep[i] > df.anx_dep.mean():
+        train1.anx_dep[i] = 2
+    else: train1.anx_dep[i] = 1
+test1 = test
+for i in range(len(test1.index)):
+    if test1.anx_dep[i] > df.anx_dep.mean():
+        test1.anx_dep[i] = 2
+    else: test1.anx_dep[i] = 1
+# response value of 2 if above average, response value of 1 if below average
+
+train_y = train1.anx_dep
+train_x = train1.drop(['anx_dep','anxiety','depression'], axis=1).astype(int)
+test_y = test1.anx_dep
+test_x = test1.drop(['anx_dep','anxiety','depression'] , axis=1).astype(int)
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(train_x, train_y)
+feat_imp = pd.DataFrame(rf.feature_importances_, index=train_x.columns)
+covars = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+train_x = train_x[covars]
+test_x = test_x[covars]
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(test_x, test_y)
+feat_imp[round(feat_imp , 4) > 0.001].dropna()
+predictions = rf.predict(test_x)
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+sig_AD_RF = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+MAE_AD_RF = np.mean(errors)
+MSE_AD_RF =metrics.mean_squared_error(test_y, predictions)
+RMSE_AD_RF = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+acc_AD_RF = round(accuracy, 2)
+imp_AD_RF = feat_imp[round(feat_imp , 4) > 0.001]
+
+# %% Anxiety and Depression LASSO
+train_y = train.anx_dep
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.anx_dep
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lasso = Lasso()
+parameters = {'alpha': [1e-15, 1e-10, 1e-8, 1e-4, 1e-3,1e-2, 1, 5, 10, 20]}
+lasso_regressor = GridSearchCV(lasso, parameters, scoring='neg_mean_squared_error', cv = 5)
+lasso_regressor.fit(train_x, train_y)
+lasso_regressor.best_params_
+lasso_regressor.best_score_
+a = 0.0001
+lasso_reg = Lasso(alpha = a, normalize=True)
+mod = lasso_reg.fit(train_x,train_y)
+covars = pd.DataFrame(mod.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00].index
+test_x = test_x[covars]
+train_x = train_x[covars]
+mod = lasso_reg.fit(test_x, test_y)
+predictions = lasso_reg.predict(test_x)
+errors = abs(predictions - test_y)
+covars = pd.DataFrame(mod.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00]
+sig_AD_LAS = covars.index
+MAE_AD_LAS = metrics.mean_absolute_error(test_y, predictions)
+MSE_AD_LAS = metrics.mean_squared_error(test_y, predictions)
+RMSE_AD_LAS = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_AD_LAS = round(accuracy, 2)
+rsq_AD_LAS = metrics.r2_score(test_y, predictions)
+covars_AD_LAS = covars
+
+# %% Depression LR
+
+train_y = train.depression
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.depression
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lm = LinearRegression()
+lm.fit(train_x, train_y)
+pd.DataFrame(lm.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(train_y,train_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+sig_p = p_values[p_values <= 0.1].index
+test_x = test_x[sig_p]
+lm.fit(test_x,test_y)
+pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(test_y,test_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+predictions = lm.predict(test_x)
+sig_D_LR = test_x.columns
+MAE_D_LR = metrics.mean_absolute_error(test_y, predictions)
+MSE_D_LR = metrics.mean_squared_error(test_y, predictions)
+RMSE_D_LR = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_D_LR = round(accuracy, 2)
+sum_D_LR = fii.summary()
+covars_D_LR = pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+
+# %% Depression RFR
+df = train.append(test)
+train1 = train
+for i in range(len(train1.index)):
+    if train1.depression[i] > df.depression.mean():
+        train1.depression[i] = 2
+    else: train1.depression[i] = 1
+test1 = test
+for i in range(len(test1.index)):
+    if test1.depression[i] > df.depression.mean():
+        test1.depression[i] = 2
+    else: test1.depression[i] = 1
+# response value of 2 if above average, response value of 1 if below average
+
+train_y = train1.depression
+train_x = train1.drop(['anx_dep','anxiety','depression'], axis=1).astype(int)
+test_y = test1.depression
+test_x = test1.drop(['anx_dep','anxiety','depression'] , axis=1).astype(int)
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(train_x, train_y)
+feat_imp = pd.DataFrame(rf.feature_importances_, index=train_x.columns)
+covars = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+train_x = train_x[covars]
+test_x = test_x[covars]
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(test_x, test_y)
+feat_imp[round(feat_imp , 4) > 0.001].dropna()
+predictions = rf.predict(test_x)
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+sig_D_RF = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+MAE_D_RF = np.mean(errors)
+MSE_D_RF =metrics.mean_squared_error(test_y, predictions)
+RMSE_D_RF = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+acc_D_RF = round(accuracy, 2)
+imp_D_RF = feat_imp[round(feat_imp , 4) > 0.001]
+
+# %% Depression LASSO
+train_y = train.depression
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.depression
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lasso = Lasso()
+parameters = {'alpha': [1e-15, 1e-10, 1e-8, 1e-4, 1e-3,1e-2, 1, 5, 10, 20]}
+lasso_regressor = GridSearchCV(lasso, parameters, scoring='neg_mean_squared_error', cv = 5)
+lasso_regressor.fit(train_x, train_y)
+lasso_regressor.best_params_
+lasso_regressor.best_score_
+a = 0.0001
+lasso_reg = Lasso(alpha = a, normalize=True)
+mod = lasso_reg.fit(train_x,train_y)
+covars = pd.DataFrame(mod.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00].index
+test_x = test_x[covars]
+train_x = train_x[covars]
+mod = lasso_reg.fit(test_x, test_y)
+predictions = lasso_reg.predict(test_x)
+errors = abs(predictions - test_y)
+covars = pd.DataFrame(mod.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00]
+sig_D_LAS = covars.index
+MAE_D_LAS = metrics.mean_absolute_error(test_y, predictions)
+MSE_D_LAS = metrics.mean_squared_error(test_y, predictions)
+RMSE_D_LAS = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_D_LAS = round(accuracy, 2)
+rsq_D_LAS = metrics.r2_score(test_y, predictions)
+covars_D_LAS = covars
+
+# %% Anxiety LR
+
+train_y = train.anxiety
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.anxiety
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lm = LinearRegression()
+lm.fit(train_x, train_y)
+pd.DataFrame(lm.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(train_y,train_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+sig_p = p_values[p_values <= 0.1].index
+test_x = test_x[sig_p]
+lm.fit(test_x,test_y)
+pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+mod = sm.OLS(test_y,test_x)
+fii = mod.fit()
+p_values = fii.summary2().tables[1]['P>|t|']
+predictions = lm.predict(test_x)
+sig_A_LR = test_x.columns
+MAE_A_LR = metrics.mean_absolute_error(test_y, predictions)
+MSE_A_LR = metrics.mean_squared_error(test_y, predictions)
+RMSE_A_LR = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_A_LR = round(accuracy, 2)
+sum_A_LR = fii.summary()
+covars_A_LR = pd.DataFrame(lm.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+
+# %% Anxiety RFR
+df = train.append(test)
+train1 = train
+for i in range(len(train1.index)):
+    if train1.anxiety[i] > df.anxiety.mean():
+        train1.anxiety[i] = 2
+    else: train1.anxiety[i] = 1
+test1 = test
+for i in range(len(test1.index)):
+    if test1.anxiety[i] > df.anxiety.mean():
+        test1.anxiety[i] = 2
+    else: test1.anxiety[i] = 1
+# response value of 2 if above average, response value of 1 if below average
+
+train_y = train1.anxiety
+train_x = train1.drop(['anx_dep','anxiety','depression'], axis=1).astype(int)
+test_y = test1.anxiety
+test_x = test1.drop(['anx_dep','anxiety','depression'] , axis=1).astype(int)
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(train_x, train_y)
+feat_imp = pd.DataFrame(rf.feature_importances_, index=train_x.columns)
+covars = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+train_x = train_x[covars]
+test_x = test_x[covars]
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(test_x, test_y)
+feat_imp[round(feat_imp , 4) > 0.001].dropna()
+predictions = rf.predict(test_x)
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+sig_A_RF = feat_imp[round(feat_imp , 4) > 0.001].dropna().index
+MAE_A_RF = np.mean(errors)
+MSE_A_RF =metrics.mean_squared_error(test_y, predictions)
+RMSE_A_RF = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+acc_A_RF = round(accuracy, 2)
+imp_A_RF = feat_imp[round(feat_imp , 4) > 0.001]
+
+# %% Anxiety LASSO
+train_y = train.anxiety
+train_x = train.drop(['anx_dep','anxiety','depression'], axis=1)
+test_y = test.anxiety
+test_x = test.drop(['anx_dep','anxiety','depression'] , axis=1)
+lasso = Lasso()
+parameters = {'alpha': [1e-15, 1e-10, 1e-8, 1e-4, 1e-3,1e-2, 1, 5, 10, 20]}
+lasso_regressor = GridSearchCV(lasso, parameters, scoring='neg_mean_squared_error', cv = 5)
+lasso_regressor.fit(train_x, train_y)
+lasso_regressor.best_params_
+lasso_regressor.best_score_
+a = 0.0001
+lasso_reg = Lasso(alpha = a, normalize=True)
+mod = lasso_reg.fit(train_x,train_y)
+covars = pd.DataFrame(mod.coef_,train_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00].index
+test_x = test_x[covars]
+train_x = train_x[covars]
+mod = lasso_reg.fit(test_x, test_y)
+predictions = lasso_reg.predict(test_x)
+errors = abs(predictions - test_y)
+covars = pd.DataFrame(mod.coef_,test_x.columns,columns=['Coeff']).sort_values(by='Coeff')
+covars = covars[round(covars.Coeff,2) != 0.00]
+sig_A_LAS = covars.index
+MAE_A_LAS = metrics.mean_absolute_error(test_y, predictions)
+MSE_A_LAS = metrics.mean_squared_error(test_y, predictions)
+RMSE_A_LAS = np.sqrt(metrics.mean_squared_error(test_y, predictions))
+errors = abs(predictions - test_y)
+mape = 100 * (errors / test_y)
+accuracy = 100 - np.mean(mape)
+acc_A_LAS = round(accuracy, 2)
+rsq_A_LAS = metrics.r2_score(test_y, predictions)
+covars_A_LAS = covars
+
+# %% All Metrics
+
+print('AD_LR Significant Covariates:',sig_AD_LR)
+print('AD_LR MAE:', MAE_AD_LR)
+print('AD_LR MSE:', MSE_AD_LR)
+print('AD_LR RMSE:', RMSE_AD_LR)
+print('AD_LR Accuracy:', acc_AD_LR, '%.')
+print('AD_LR Coefficients:', covars_AD_LR)
+print(sum_AD_LR)
+
+print('AD_RF Significant Covariates:',sig_AD_RF)
+print('AD_RF MAE:', MAE_AD_RF)
+print('AD_RF MSE:', MSE_AD_RF)
+print('AD_RF RMSE:', RMSE_AD_RF)
+print('AD_RF Accuracy:', acc_AD_RF, '%.')
+print('AD_RF Importances:', imp_AD_RF)
+
+print('AD_LAS Significant Covariates:',sig_AD_LAS)
+print('AD_LAS MAE:', MAE_AD_LAS)
+print('AD_LAS MSE:', MSE_AD_LAS)
+print('AD_LAS RMSE:', RMSE_AD_LAS)
+print('AD_LAS R-Squared:', rsq_AD_LAS,)
+print('AD_LAS Accuracy:', acc_AD_LAS, '%.')
+print('AD_LAS Coefficients:', covars_AD_LAS)
+
+print('D_LR Significant Covariates:',sig_AD_LR)
+print('D_LR MAE:', MAE_D_LR)
+print('D_LR MSE:', MSE_D_LR)
+print('D_LR RMSE:', RMSE_D_LR)
+print('D_LR Accuracy:', acc_D_LR, '%.')
+print('D_LR Coefficients:', covars_D_LR)
+print(sum_D_LR)
+
+print('D_RF Significant Covariates:',sig_D_RF)
+print('D_RF MAE:', MAE_D_RF)
+print('D_RF MSE:', MSE_D_RF)
+print('D_RF RMSE:', RMSE_D_RF)
+print('D_RF Accuracy:', acc_D_RF, '%.')
+print('D_RF Importances:', imp_D_RF)
+
+print('D_LAS Significant Covariates:',sig_D_LAS)
+print('D_LAS MAE:', MAE_D_LAS)
+print('D_LAS MSE:', MSE_D_LAS)
+print('D_LAS RMSE:', RMSE_D_LAS)
+print('D_LAS R-Squared:', rsq_D_LAS,)
+print('D_LAS Accuracy:', acc_D_LAS, '%.')
+print('D_LAS Coefficients:', covars_D_LAS)
+
+print('A_LR Significant Covariates:',sig_AD_LR)
+print('A_LR MAE:', MAE_A_LR)
+print('A_LR MSE:', MSE_A_LR)
+print('A_LR RMSE:', RMSE_A_LR)
+print('A_LR Accuracy:', acc_A_LR, '%.')
+print('A_LR Coefficients:', covars_A_LR)
+print(sum_A_LR)
+
+print('A_RF Significant Covariates:',sig_A_RF)
+print('A_RF MAE:', MAE_A_RF)
+print('A_RF MSE:', MSE_A_RF)
+print('A_RF RMSE:', RMSE_A_RF)
+print('A_RF Accuracy:', acc_A_RF, '%.')
+print('A_RF Importances:', imp_A_RF)
+
+print('D_LAS Significant Covariates:',sig_D_LAS)
+print('D_LAS MAE:', MAE_D_LAS)
+print('D_LAS MSE:', MSE_D_LAS)
+print('D_LAS RMSE:', RMSE_D_LAS)
+print('D_LAS R-Squared:', rsq_D_LAS,)
+print('D_LAS Accuracy:', acc_D_LAS, '%.')
+print('D_LAS Coefficients:', covars_D_LAS)
